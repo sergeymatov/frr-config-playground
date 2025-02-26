@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: frr-pod
+  namespace: default
+spec:
+  containers:
+    - name: frr
+      image: quay.io/frrouting/frr:9.1.0
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        privileged: true
+        runAsUser: 0
+      volumeMounts:
+        - name: frr-config
+          mountPath: /etc/frr
+        - name: frr-sockets
+          mountPath: /var/run/frr
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          if [ ! -f /etc/frr/daemons ]; then
+            echo "Creating default /etc/frr/daemons file"
+            echo "zebra=yes" > /etc/frr/daemons
+            echo "bgpd=yes" >> /etc/frr/daemons
+            echo "ospfd=no" >> /etc/frr/daemons
+            echo "ospf6d=no" >> /etc/frr/daemons
+            echo "ripd=no" >> /etc/frr/daemons
+            echo "ripngd=no" >> /etc/frr/daemons
+            echo "isisd=no" >> /etc/frr/daemons
+            echo "pimd=no" >> /etc/frr/daemons
+            echo "ldpd=no" >> /etc/frr/daemons
+            echo "nhrpd=no" >> /etc/frr/daemons
+            echo "eigrpd=no" >> /etc/frr/daemons
+            echo "babeld=no" >> /etc/frr/daemons
+            echo "sharpd=no" >> /etc/frr/daemons
+            echo "pbrd=no" >> /etc/frr/daemons
+            echo "bfdd=no" >> /etc/frr/daemons
+            echo "fabricd=no" >> /etc/frr/daemons
+          fi
+          /usr/lib/frr/frrinit.sh start
+          echo "FRR started. Sleeping..."
+          sleep infinity
+          
+    - name: frr-config
+      image: frr-config:latest
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        privileged: true
+        runAsUser: 0
+      volumeMounts:
+        - name: frr-config
+          mountPath: /etc/frr
+        - name: frr-sockets
+          mountPath: /var/run/frr
+      command: ["/usr/local/bin/frr-config"]
+  
+  volumes:
+    - name: frr-config
+      emptyDir: {}
+    - name: frr-sockets
+      emptyDir: {}
+

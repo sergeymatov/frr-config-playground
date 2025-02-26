@@ -30,7 +30,7 @@ type NeighborConfig struct {
 	Description string
 }
 
-/*const frrConfigTemplate = `
+const frrConfigTemplate = `
 frr defaults traditional
 hostname frr-k8s
 log syslog {{.LogLevel}}
@@ -62,29 +62,32 @@ router bgp {{$.ASN}} vrf {{.VRF}}
 
 exit
 {{- end }}
-`*/
+`
 
+/*
 const frrConfigTemplate = `
 frr defaults traditional
 hostname frr-k8s
 log syslog informational
 
 router bgp 64512
- bgp router-id 192.168.1.1
- bgp log-neighbor-changes
- no bgp ebgp-requires-policy
- no bgp network import-check
- no bgp default ipv4-unicast
- bgp graceful-restart
- timers bgp 30 90
 
- address-family ipv4 unicast
- exit-address-family
+	bgp router-id 192.168.1.1
+	bgp log-neighbor-changes
+	no bgp ebgp-requires-policy
+	no bgp network import-check
+	no bgp default ipv4-unicast
+	bgp graceful-restart
+	timers bgp 30 90
 
- address-family ipv6 unicast
- exit-address-family
+	address-family ipv4 unicast
+	exit-address-family
+
+	address-family ipv6 unicast
+	exit-address-family
+
 `
-
+*/
 func generateFRRConfig(config GlobalConfig, outputPath string) error {
 	// Parse the template
 	tmpl, err := template.New("frrConfig").Parse(frrConfigTemplate)
