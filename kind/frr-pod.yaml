@@ -6,7 +6,7 @@ metadata:
 spec:
   containers:
     - name: frr
-      image: quay.io/frrouting/frr:9.1.0
+      image: quay.io/frrouting/frr:9.1.0 #frr-ubuntu:latest
       imagePullPolicy: IfNotPresent
       securityContext:
         privileged: true

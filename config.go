@@ -65,6 +65,8 @@ exit
 `
 
 /*
+	This is just a sample configuration used for testing
+
 const frrConfigTemplate = `
 frr defaults traditional
 hostname frr-k8s
@@ -88,6 +90,7 @@ router bgp 64512
 
 `
 */
+
 func generateFRRConfig(config GlobalConfig, outputPath string) error {
 	// Parse the template
 	tmpl, err := template.New("frrConfig").Parse(frrConfigTemplate)
@@ -102,6 +105,7 @@ func generateFRRConfig(config GlobalConfig, outputPath string) error {
 	}
 	defer file.Close()
 
+	// This is a lifehack since vtysh.conf is required for FRR to start but its not present
 	vtysh, err := os.Create("/etc/frr/vtysh.conf")
 	if err != nil {
 		return err
