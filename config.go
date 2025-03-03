@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"text/template"
 	"time"
 )
@@ -97,14 +98,9 @@ hostname frr-k8s
 log syslog {{.LogLevel}}
 
 {{- range .Interfaces }}
-interface {{.Name}}{{ if .VRF }} vrf {{.VRF}}{{end}}
+interface {{.Name}}
+ vrf {{.VRF}}
  ip address {{.IP}}
-exit
-{{- end }}
-
-{{- range .VRFs }}
-vrf {{.Name}}
- vni {{.VNI}}
 exit
 {{- end }}
 
@@ -137,32 +133,36 @@ exit
 {{- end }}
 `
 
-/*
-	This is just a sample configuration used for testing
+// updateVRFs ensures the VRFs are properly set up at the OS level
+func updateVRFs(vrfs []VRFConfig) error {
+	for _, vrf := range vrfs {
+		fmt.Printf("Configuring VRF: %s with VNI: %d\n", vrf.Name, vrf.VNI)
 
-const frrConfigTemplate = `
-frr defaults traditional
-hostname frr-k8s
-log syslog informational
+		// Check if the VRF already exists
+		checkCmd := exec.Command("ip", "link", "show", "type", "vrf")
+		output, _ := checkCmd.CombinedOutput()
 
-router bgp 64512
+		if !strings.Contains(string(output), vrf.Name) {
+			// Create the VRF if it doesn't exist
+			fmt.Printf("Creating VRF %s\n", vrf.Name)
+			cmd := exec.Command("ip", "link", "add", vrf.Name, "type", "vrf", "table", fmt.Sprintf("%d", vrf.VNI))
+			err := cmd.Run()
+			if err != nil {
+				fmt.Printf("Error creating VRF %s: %v\n", vrf.Name, err)
+				return err
+			}
+		}
 
-	bgp router-id 192.168.1.1
-	bgp log-neighbor-changes
-	no bgp ebgp-requires-policy
-	no bgp network import-check
-	no bgp default ipv4-unicast
-	bgp graceful-restart
-	timers bgp 30 90
-
-	address-family ipv4 unicast
-	exit-address-family
-
-	address-family ipv6 unicast
-	exit-address-family
-
-`
-*/
+		// Ensure the VRF is up
+		cmd := exec.Command("ip", "link", "set", vrf.Name, "up")
+		err := cmd.Run()
+		if err != nil {
+			fmt.Printf("Error bringing up VRF %s: %v\n", vrf.Name, err)
+			return err
+		}
+	}
+	return nil
+}
 
 func generateFRRConfig(config GlobalConfig, outputPath string) error {
 	// Parse the template
@@ -214,33 +214,39 @@ func main() {
 		LogLevel: "debug",
 		Routers: []RouterConfig{
 			{
-				VRF:      "GOVNO",
+				VRF:      "hedge",
 				RouterID: "192.168.1.1",
 				Peers: []NeighborConfig{
-					{PeerIP: "192.168.1.2", PeerASN: "64513", Description: "DRUG GOVNA"},
-					{PeerIP: "192.168.1.3", PeerASN: "64514", Password: "zalupa"},
+					{PeerIP: "192.168.1.2", PeerASN: "64513", Description: "hedge's friend"},
+					{PeerIP: "192.168.1.3", PeerASN: "64514", Password: "nothedge"},
 				},
 			},
 			{
-				VRF:      "MOCHA",
+				VRF:      "hog",
 				RouterID: "192.168.2.1",
 				Peers: []NeighborConfig{
-					{PeerIP: "192.168.2.2", PeerASN: "64515", Description: "DRUG MOCHI"},
+					{PeerIP: "192.168.2.2", PeerASN: "64515", Description: "hog's friend"},
 				},
 			},
 		},
 		VRFs: []VRFConfig{
-			{Name: "GOVNO", VNI: 100},
-			{Name: "MOCHA", VNI: 200},
+			{Name: "hedge", VNI: 100},
+			{Name: "hog", VNI: 200},
 		},
 		Interfaces: []InterfaceConfig{
-			{Name: "eth0", VRF: "GOVNO", IP: "192.168.1.1/24"},
+			{Name: "eth0", VRF: "hedge", IP: "192.168.1.1/24"},
 		},
 	}
 
 	// Generate FRR config and reload FRR periodically
 	for {
-		err := generateFRRConfig(globalConfig, "/etc/frr/frr.conf")
+		// Update VRFs
+		err := updateVRFs(globalConfig.VRFs)
+		if err != nil {
+			fmt.Println("Error updating VRFs:", err)
+		}
+
+		err = generateFRRConfig(globalConfig, "/etc/frr/frr.conf")
 		if err != nil {
 			fmt.Println("Error generating FRR config:", err)
 		} else {

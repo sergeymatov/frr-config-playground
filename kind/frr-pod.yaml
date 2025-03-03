@@ -22,6 +22,7 @@ spec:
           if [ ! -f /etc/frr/daemons ]; then
             echo "Creating default /etc/frr/daemons file"
             echo "zebra=yes" > /etc/frr/daemons
+            echo "zebra_options=--daemon -M vrf" >> /etc/frr/daemons
             echo "bgpd=yes" >> /etc/frr/daemons
             echo "ospfd=no" >> /etc/frr/daemons
             echo "ospf6d=no" >> /etc/frr/daemons
