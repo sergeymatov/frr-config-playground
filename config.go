@@ -10,9 +10,24 @@ import (
 
 // GlobalConfig structure
 type GlobalConfig struct {
-	ASN      uint16
-	LogLevel string
-	Routers  []RouterConfig
+	ASN        uint16
+	LogLevel   string
+	Routers    []RouterConfig
+	VRFs       []VRFConfig
+	Interfaces []InterfaceConfig
+}
+
+// InterfaceConfig structure
+type InterfaceConfig struct {
+	Name string
+	VRF  string
+	IP   string
+}
+
+// VRFConfig structure
+type VRFConfig struct {
+	Name string
+	VNI  uint32
 }
 
 // RouterConfig structure
@@ -30,10 +45,68 @@ type NeighborConfig struct {
 	Description string
 }
 
+/*const frrConfigTemplate = `
+frr defaults traditional
+hostname frr-k8s
+log syslog {{.LogLevel}}
+
+{{- range .Interfaces }}
+interface {{.Name}}{{ if .VRF }} vrf {{.VRF}}{{end}}
+ ip address {{.IP}}
+exit
+{{- end }}
+
+{{- range .VRFs }}
+vrf {{.Name}}
+ vni {{.VNI}}
+exit
+{{- end }}
+
+{{- range .Routers }}
+router bgp {{$.ASN}}{{ if .VRF }} vrf {{.VRF}}
+ bgp router-id {{.RouterID}}
+ bgp log-neighbor-changes
+ bgp graceful-restart
+ no bgp ebgp-requires-policy
+ no bgp network import-check
+ no bgp default ipv4-unicast
+
+{{- range .Peers }}
+ neighbor {{.PeerIP}} remote-as {{.PeerASN}}
+{{- if .Password }}
+ neighbor {{.PeerIP}} password {{.Password}}
+{{- end }}
+{{- if .Description }}
+ neighbor {{.PeerIP}} description "{{.Description}}"
+{{- end }}
+{{- end }}
+
+ address-family ipv4 unicast
+{{- range .Peers }}
+  neighbor {{.PeerIP}} activate
+{{- end }}
+ exit-address-family
+
+exit
+{{- end }}
+`*/
+
 const frrConfigTemplate = `
 frr defaults traditional
 hostname frr-k8s
 log syslog {{.LogLevel}}
+
+{{- range .Interfaces }}
+interface {{.Name}}{{ if .VRF }} vrf {{.VRF}}{{end}}
+ ip address {{.IP}}
+exit
+{{- end }}
+
+{{- range .VRFs }}
+vrf {{.Name}}
+ vni {{.VNI}}
+exit
+{{- end }}
 
 {{- range .Routers }}
 router bgp {{$.ASN}} vrf {{.VRF}}
@@ -155,6 +228,13 @@ func main() {
 					{PeerIP: "192.168.2.2", PeerASN: "64515", Description: "DRUG MOCHI"},
 				},
 			},
+		},
+		VRFs: []VRFConfig{
+			{Name: "GOVNO", VNI: 100},
+			{Name: "MOCHA", VNI: 200},
+		},
+		Interfaces: []InterfaceConfig{
+			{Name: "eth0", VRF: "GOVNO", IP: "192.168.1.1/24"},
 		},
 	}
 
