@@ -132,6 +132,39 @@ router bgp {{$.ASN}} vrf {{.VRF}}
 exit
 {{- end }}
 `
+const frrReloaderTemplate = `
+frr defaults traditional
+hostname frr-k8s
+log syslog {{.LogLevel}}
+
+{{- range .Routers }}
+router bgp {{$.ASN}} vrf {{.VRF}}
+ bgp router-id {{.RouterID}}
+ bgp log-neighbor-changes
+ bgp graceful-restart
+ no bgp ebgp-requires-policy
+ no bgp network import-check
+ no bgp default ipv4-unicast
+
+{{- range .Peers }}
+ neighbor {{.PeerIP}} remote-as {{.PeerASN}}
+{{- if .Password }}
+ neighbor {{.PeerIP}} password {{.Password}}
+{{- end }}
+{{- if .Description }}
+ neighbor {{.PeerIP}} description "{{.Description}}"
+{{- end }}
+{{- end }}
+
+ address-family ipv4 unicast
+{{- range .Peers }}
+  neighbor {{.PeerIP}} activate
+{{- end }}
+ exit-address-family
+
+exit
+{{- end }}
+`
 
 // updateVRFs ensures the VRFs are properly set up at the OS level
 func updateVRFs(vrfs []VRFConfig) error {
@@ -164,7 +197,7 @@ func updateVRFs(vrfs []VRFConfig) error {
 	return nil
 }
 
-func generateFRRConfig(config GlobalConfig, outputPath string) error {
+func generateFRRConfig(config GlobalConfig, configPath string, reloaderPath string) error {
 	// Parse the template
 	tmpl, err := template.New("frrConfig").Parse(frrConfigTemplate)
 	if err != nil {
@@ -172,7 +205,7 @@ func generateFRRConfig(config GlobalConfig, outputPath string) error {
 	}
 
 	// Create or overwrite the configuration file
-	file, err := os.Create(outputPath)
+	file, err := os.Create(configPath)
 	if err != nil {
 		return err
 	}
@@ -191,13 +224,31 @@ func generateFRRConfig(config GlobalConfig, outputPath string) error {
 		return err
 	}
 
-	fmt.Println("FRR configuration generated successfully at", outputPath)
+	// Generate frrReloaded.conf
+	tmpl, err = template.New("frrReloader").Parse(frrReloaderTemplate)
+	if err != nil {
+		return err
+	}
+
+	// Create or overwrite the configuration file
+	file, err = os.Create(reloaderPath)
+	if err != nil {
+		return err
+	}
+
+	// Execute template and write to file
+	err = tmpl.Execute(file, config)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("FRR configuration generated successfully at", configPath)
 	return nil
 }
 
-func reloadFRR() error {
+func reloadFRR(configFile string) error {
 	fmt.Println("Reloading FRR configuration...")
-	cmd := exec.Command("/usr/lib/frr/frr-reload.py", "--reload", "--overwrite", "/etc/frr/frr.conf")
+	cmd := exec.Command("/usr/lib/frr/frr-reload.py", "--reload", "--overwrite", configFile)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Println("Failed to reload FRR:", err, string(output))
@@ -246,11 +297,11 @@ func main() {
 			fmt.Println("Error updating VRFs:", err)
 		}
 
-		err = generateFRRConfig(globalConfig, "/etc/frr/frr.conf")
+		err = generateFRRConfig(globalConfig, "/etc/frr/frr.conf", "/etc/frr/frr-reloaded.conf")
 		if err != nil {
 			fmt.Println("Error generating FRR config:", err)
 		} else {
-			err = reloadFRR()
+			err = reloadFRR("/etc/frr/frr-reloaded.conf")
 			if err != nil {
 				fmt.Println("Error reloading FRR:", err)
 			}
