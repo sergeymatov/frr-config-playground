@@ -11,11 +11,13 @@ import (
 
 // GlobalConfig structure
 type GlobalConfig struct {
-	ASN        uint16
-	LogLevel   string
-	Routers    []RouterConfig
-	VRFs       []VRFConfig
-	Interfaces []InterfaceConfig
+	ASN         uint16
+	LogLevel    string
+	Routers     []RouterConfig
+	VRFs        []VRFConfig
+	Interfaces  []InterfaceConfig
+	PrefixLists []PrefixListConfig
+	RouteMaps   []RouteMapConfig
 }
 
 // InterfaceConfig structure
@@ -25,10 +27,35 @@ type InterfaceConfig struct {
 	IP   string
 }
 
+// PrefixListConfig structure
+type PrefixListConfig struct {
+	Name   string
+	Seq    int
+	Permit bool
+	Prefix string
+}
+
+// RouteMapConfig structure
+type RouteMapConfig struct {
+	Name       string
+	Permit     bool
+	Seq        int
+	PrefixList string
+	MatchType  string
+}
+
+// StaticRouteConfig structure
+type StaticRouteConfig struct {
+	VRF         string
+	Destination string
+	NextHop     string
+}
+
 // VRFConfig structure
 type VRFConfig struct {
-	Name string
-	VNI  uint32
+	Name         string
+	VNI          uint32
+	StaticRoutes []StaticRouteConfig
 }
 
 // RouterConfig structure
@@ -44,6 +71,8 @@ type NeighborConfig struct {
 	PeerASN     string
 	Password    string
 	Description string
+	RouteMapIn  string
+	RouteMapOut string
 }
 
 /*const frrConfigTemplate = `
@@ -92,7 +121,7 @@ exit
 {{- end }}
 `*/
 
-const frrConfigTemplate = `
+/*const frrConfigTemplate = `
 frr defaults traditional
 hostname frr-k8s
 log syslog {{.LogLevel}}
@@ -120,6 +149,61 @@ router bgp {{$.ASN}} vrf {{.VRF}}
 {{- end }}
 {{- if .Description }}
  neighbor {{.PeerIP}} description "{{.Description}}"
+{{- end }}
+{{- end }}
+
+ address-family ipv4 unicast
+{{- range .Peers }}
+  neighbor {{.PeerIP}} activate
+{{- end }}
+ exit-address-family
+
+exit
+{{- end }}
+`*/
+
+const frrConfigTemplate = `
+frr defaults traditional
+hostname frr-k8s
+log syslog {{.LogLevel}}
+
+!{{- range $v:= .VRFs }}
+vrf {{$v.Name}}{{- range $v.StaticRoutes }}
+ ip route {{.Destination}} {{.NextHop}}{{- end }}
+exit-vrf{{- end }}
+
+{{- range .PrefixLists }}
+ip prefix-list {{.Name}} seq {{.Seq}} {{if .Permit}}permit{{else}}deny{{end}} {{.Prefix}}
+{{- end }}
+
+{{- range .RouteMaps }}
+route-map {{.Name}} {{if .Permit}}permit{{else}}deny{{end}} {{.Seq}}
+ match ip address {{.PrefixList}}
+ exit
+{{- end }}
+
+{{- range .Routers }}
+router bgp {{$.ASN}} vrf {{.VRF}}
+ bgp router-id {{.RouterID}}
+ bgp log-neighbor-changes
+ bgp graceful-restart
+ no bgp ebgp-requires-policy
+ no bgp network import-check
+ no bgp default ipv4-unicast
+
+{{- range .Peers }}
+ neighbor {{.PeerIP}} remote-as {{.PeerASN}}
+{{- if .Password }}
+ neighbor {{.PeerIP}} password {{.Password}}
+{{- end }}
+{{- if .Description }}
+ neighbor {{.PeerIP}} description "{{.Description}}"
+{{- end }}
+{{- if .RouteMapIn }}
+ neighbor {{.PeerIP}} route-map {{.RouteMapIn}} in
+{{- end }}
+{{- if .RouteMapOut }}
+ neighbor {{.PeerIP}} route-map {{.RouteMapOut}} out
 {{- end }}
 {{- end }}
 
@@ -225,16 +309,25 @@ func main() {
 				VRF:      "hog",
 				RouterID: "192.168.2.1",
 				Peers: []NeighborConfig{
-					{PeerIP: "192.168.2.2", PeerASN: "64515", Description: "hog's friend"},
+					{PeerIP: "192.168.2.2", PeerASN: "64515", Description: "hog's friend", RouteMapIn: "test", RouteMapOut: "test"},
 				},
 			},
 		},
 		VRFs: []VRFConfig{
-			{Name: "hedge", VNI: 100},
+			{Name: "hedge", VNI: 100,
+				StaticRoutes: []StaticRouteConfig{
+					{VRF: "hedge", Destination: "0.0.0.0/0", NextHop: "192.168.1.1"},
+				}},
 			{Name: "hog", VNI: 200},
 		},
 		Interfaces: []InterfaceConfig{
 			{Name: "eth0", VRF: "hedge", IP: "192.168.1.1/24"},
+		},
+		PrefixLists: []PrefixListConfig{
+			{Name: "test", Seq: 10, Permit: true, Prefix: "10.10.0.0/16"},
+		},
+		RouteMaps: []RouteMapConfig{
+			{Name: "test", Permit: true, Seq: 10, PrefixList: "test", MatchType: "ip"},
 		},
 	}
 
