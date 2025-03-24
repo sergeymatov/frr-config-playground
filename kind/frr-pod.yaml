@@ -38,7 +38,7 @@ spec:
             echo "pbrd=no" >> /etc/frr/daemons
             echo "bfdd=no" >> /etc/frr/daemons
             echo "fabricd=no" >> /etc/frr/daemons
-            echp "staticd=yes" >> /etc/frr/daemons
+            echo "staticd=yes" >> /etc/frr/daemons
           fi
           /usr/lib/frr/frrinit.sh start
           echo "FRR started. Sleeping..."

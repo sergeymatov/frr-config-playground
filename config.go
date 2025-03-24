@@ -15,16 +15,12 @@ type GlobalConfig struct {
 	LogLevel    string
 	Routers     []RouterConfig
 	VRFs        []VRFConfig
-	Interfaces  []InterfaceConfig
 	PrefixLists []PrefixListConfig
 	RouteMaps   []RouteMapConfig
 }
 
-// InterfaceConfig structure
-type InterfaceConfig struct {
-	Name string
-	VRF  string
-	IP   string
+type EVPNConfig struct {
+	VRF string
 }
 
 // PrefixListConfig structure
@@ -63,6 +59,7 @@ type RouterConfig struct {
 	VRF      string
 	RouterID string
 	Peers    []NeighborConfig
+	EVPNs    []EVPNConfig
 }
 
 // NeighborConfig structure
@@ -183,7 +180,7 @@ route-map {{.Name}} {{if .Permit}}permit{{else}}deny{{end}} {{.Seq}}
 {{- end }}
 
 {{- range .Routers }}
-router bgp {{$.ASN}} vrf {{.VRF}}
+router bgp {{$.ASN}}{{if .VRF}} vrf {{.VRF}}{{end}}
  bgp router-id {{.RouterID}}
  bgp log-neighbor-changes
  bgp graceful-restart
@@ -191,27 +188,38 @@ router bgp {{$.ASN}} vrf {{.VRF}}
  no bgp network import-check
  no bgp default ipv4-unicast
 
-{{- range .Peers }}
- neighbor {{.PeerIP}} remote-as {{.PeerASN}}
-{{- if .Password }}
- neighbor {{.PeerIP}} password {{.Password}}
-{{- end }}
-{{- if .Description }}
- neighbor {{.PeerIP}} description "{{.Description}}"
-{{- end }}
-{{- if .RouteMapIn }}
- neighbor {{.PeerIP}} route-map {{.RouteMapIn}} in
-{{- end }}
-{{- if .RouteMapOut }}
- neighbor {{.PeerIP}} route-map {{.RouteMapOut}} out
-{{- end }}
-{{- end }}
+ {{- range .Peers }}
+  neighbor {{.PeerIP}} remote-as {{.PeerASN}}
+ {{- if .Password }}
+  neighbor {{.PeerIP}} password {{.Password}}
+ {{- end }}
+ {{- if .Description }}
+  neighbor {{.PeerIP}} description "{{.Description}}"
+ {{- end }}
+ {{- if .RouteMapIn }}
+  neighbor {{.PeerIP}} route-map {{.RouteMapIn}} in
+ {{- end }}
+ {{- if .RouteMapOut }}
+  neighbor {{.PeerIP}} route-map {{.RouteMapOut}} out
+ {{- end }}
+  address-family ipv4 unicast
+   neighbor {{.PeerIP}} activate
+  exit-address-family
+  address-family l2vpn evpn
+   neighbor {{.PeerIP}} activate
+   advertise-all-vni
+   advertise-svi-ip
+  exit-address-family
+ {{- end }}
+ exit
 
- address-family ipv4 unicast
-{{- range .Peers }}
-  neighbor {{.PeerIP}} activate
-{{- end }}
+ {{- range .EVPNs }}
+router bgp {{$.ASN}} vrf {{.VRF}}
+ address-family l2vpn evpn
+  advertise ipv4 unicast
  exit-address-family
+exit
+{{- end }}
 
 exit
 {{- end }}
@@ -304,12 +312,18 @@ func main() {
 					{PeerIP: "192.168.1.2", PeerASN: "64513", Description: "hedge's friend"},
 					{PeerIP: "192.168.1.3", PeerASN: "64514", Password: "nothedge"},
 				},
+				EVPNs: []EVPNConfig{
+					{VRF: "hedge"},
+				},
 			},
 			{
 				VRF:      "hog",
 				RouterID: "192.168.2.1",
 				Peers: []NeighborConfig{
 					{PeerIP: "192.168.2.2", PeerASN: "64515", Description: "hog's friend", RouteMapIn: "test", RouteMapOut: "test"},
+				},
+				EVPNs: []EVPNConfig{
+					{VRF: "hog"},
 				},
 			},
 		},
@@ -319,9 +333,6 @@ func main() {
 					{VRF: "hedge", Destination: "0.0.0.0/0", NextHop: "192.168.1.1"},
 				}},
 			{Name: "hog", VNI: 200},
-		},
-		Interfaces: []InterfaceConfig{
-			{Name: "eth0", VRF: "hedge", IP: "192.168.1.1/24"},
 		},
 		PrefixLists: []PrefixListConfig{
 			{Name: "test", Seq: 10, Permit: true, Prefix: "10.10.0.0/16"},
