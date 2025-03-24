@@ -60,7 +60,6 @@ type RouterConfig struct {
 	VRF      string
 	RouterID string
 	Peers    []NeighborConfig
-	Fabric   bool
 }
 
 // NeighborConfig structure
@@ -71,94 +70,8 @@ type NeighborConfig struct {
 	Description string
 	RouteMapIn  string
 	RouteMapOut string
+	Fabric      bool
 }
-
-/*const frrConfigTemplate = `
-frr defaults traditional
-hostname frr-k8s
-log syslog {{.LogLevel}}
-
-{{- range .Interfaces }}
-interface {{.Name}}{{ if .VRF }} vrf {{.VRF}}{{end}}
- ip address {{.IP}}
-exit
-{{- end }}
-
-{{- range .VRFs }}
-vrf {{.Name}}
- vni {{.VNI}}
-exit
-{{- end }}
-
-{{- range .Routers }}
-router bgp {{$.ASN}}{{ if .VRF }} vrf {{.VRF}}
- bgp router-id {{.RouterID}}
- bgp log-neighbor-changes
- bgp graceful-restart
- no bgp ebgp-requires-policy
- no bgp network import-check
- no bgp default ipv4-unicast
-
-{{- range .Peers }}
- neighbor {{.PeerIP}} remote-as {{.PeerASN}}
-{{- if .Password }}
- neighbor {{.PeerIP}} password {{.Password}}
-{{- end }}
-{{- if .Description }}
- neighbor {{.PeerIP}} description "{{.Description}}"
-{{- end }}
-{{- end }}
-
- address-family ipv4 unicast
-{{- range .Peers }}
-  neighbor {{.PeerIP}} activate
-{{- end }}
- exit-address-family
-
-exit
-{{- end }}
-`*/
-
-/*const frrConfigTemplate = `
-frr defaults traditional
-hostname frr-k8s
-log syslog {{.LogLevel}}
-
-{{- range .Interfaces }}
-interface {{.Name}}
- vrf {{.VRF}}
- ip address {{.IP}}
-exit
-{{- end }}
-
-{{- range .Routers }}
-router bgp {{$.ASN}} vrf {{.VRF}}
- bgp router-id {{.RouterID}}
- bgp log-neighbor-changes
- bgp graceful-restart
- no bgp ebgp-requires-policy
- no bgp network import-check
- no bgp default ipv4-unicast
-
-{{- range .Peers }}
- neighbor {{.PeerIP}} remote-as {{.PeerASN}}
-{{- if .Password }}
- neighbor {{.PeerIP}} password {{.Password}}
-{{- end }}
-{{- if .Description }}
- neighbor {{.PeerIP}} description "{{.Description}}"
-{{- end }}
-{{- end }}
-
- address-family ipv4 unicast
-{{- range .Peers }}
-  neighbor {{.PeerIP}} activate
-{{- end }}
- exit-address-family
-
-exit
-{{- end }}
-`*/
 
 const frrConfigTemplate = `
 frr defaults traditional
@@ -167,8 +80,10 @@ log syslog {{.LogLevel}}
 
 !{{- range $v:= .VRFs }}
 vrf {{$v.Name}}
+{{- if $v.StaticRoutes }}
 {{- range $v.StaticRoutes }}
  ip route {{.Destination}} {{.NextHop}}
+{{- end }}
 {{- end }}
 exit-vrf
 {{- end }}
@@ -196,7 +111,7 @@ router bgp {{$.ASN}}{{if .VRF}} vrf {{.VRF}}{{end}}
 
  {{- range .Peers }}
   neighbor {{.PeerIP}} remote-as {{.PeerASN}}
- {{- if .Password }}
+ {{- if and .Password (ne .Password "") }}
   neighbor {{.PeerIP}} password {{.Password}}
  {{- end }}
  {{- if .Description }}
@@ -236,30 +151,35 @@ exit
 {{- end }}
 `
 
-// updateVRFs ensures the VRFs are properly set up at the OS level
 func updateVRFs(vrfs []VRFConfig) error {
 	for _, vrf := range vrfs {
 		fmt.Printf("Configuring VRF: %s with VNI: %d\n", vrf.Name, vrf.VNI)
 
 		// Check if the VRF already exists
-		checkCmd := exec.Command("ip", "link", "show", "type", "vrf")
-		output, _ := checkCmd.CombinedOutput()
-
-		if !strings.Contains(string(output), vrf.Name) {
-			// Create the VRF if it doesn't exist
-			fmt.Printf("Creating VRF %s\n", vrf.Name)
-			cmd := exec.Command("ip", "link", "add", vrf.Name, "type", "vrf", "table", fmt.Sprintf("%d", vrf.VNI))
-			err := cmd.Run()
-			if err != nil {
-				fmt.Printf("Error creating VRF %s: %v\n", vrf.Name, err)
+		checkCmd := exec.Command("ip", "link", "show", vrf.Name)
+		output, err := checkCmd.CombinedOutput()
+		if err == nil && strings.Contains(string(output), vrf.Name) {
+			// VRF exists, ensure it's up
+			fmt.Printf("VRF %s already exists, bringing it up\n", vrf.Name)
+			cmd := exec.Command("ip", "link", "set", vrf.Name, "up")
+			if err := cmd.Run(); err != nil {
+				fmt.Printf("Error bringing up VRF %s: %v\n", vrf.Name, err)
 				return err
 			}
+			continue // Skip creating VRF since it exists
 		}
 
-		// Ensure the VRF is up
-		cmd := exec.Command("ip", "link", "set", vrf.Name, "up")
-		err := cmd.Run()
-		if err != nil {
+		// Create the VRF if it doesn't exist
+		fmt.Printf("Creating VRF %s\n", vrf.Name)
+		cmd := exec.Command("ip", "link", "add", vrf.Name, "type", "vrf", "table", fmt.Sprintf("%d", vrf.VNI))
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Error creating VRF %s: %v\n", vrf.Name, err)
+			return err
+		}
+
+		// Bring VRF up
+		cmd = exec.Command("ip", "link", "set", vrf.Name, "up")
+		if err := cmd.Run(); err != nil {
 			fmt.Printf("Error bringing up VRF %s: %v\n", vrf.Name, err)
 			return err
 		}
@@ -282,7 +202,7 @@ func generateFRRConfig(config GlobalConfig, outputPath string) error {
 	defer file.Close()
 
 	// This is a lifehack since vtysh.conf is required for FRR to start but its not present
-	vtysh, err := os.Create("/tmp/vtysh.conf")
+	vtysh, err := os.Create("/etc/frr/vtysh.conf")
 	if err != nil {
 		return err
 	}
@@ -300,7 +220,7 @@ func generateFRRConfig(config GlobalConfig, outputPath string) error {
 
 func reloadFRR() error {
 	fmt.Println("Reloading FRR configuration...")
-	cmd := exec.Command("/usr/lib/frr/frr-reload.py", "--reload", "--overwrite", "/tmp/frr.conf")
+	cmd := exec.Command("/usr/lib/frr/frr-reload.py", "--reload", "--overwrite", "/etc/frr/frr.conf")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Println("Failed to reload FRR:", err, string(output))
@@ -319,9 +239,8 @@ func main() {
 			{
 				RouterID: "172.30.1.5",
 				Peers: []NeighborConfig{
-					{PeerIP: "172.30.1.1", PeerASN: "64513", Description: "spine1"},
+					{PeerIP: "172.30.1.1", PeerASN: "64513", Description: "spine1", Fabric: true},
 				},
-				Fabric: true,
 			},
 			{
 				VRF:      "hedge",
@@ -366,7 +285,7 @@ func main() {
 			fmt.Println("Error updating VRFs:", err)
 		}
 
-		err = generateFRRConfig(globalConfig, "/tmp/frr.conf")
+		err = generateFRRConfig(globalConfig, "/etc/frr/frr.conf")
 		if err != nil {
 			fmt.Println("Error generating FRR config:", err)
 		} else {
