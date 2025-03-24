@@ -17,6 +17,7 @@ type GlobalConfig struct {
 	VRFs        []VRFConfig
 	PrefixLists []PrefixListConfig
 	RouteMaps   []RouteMapConfig
+	EVPNs       []EVPNConfig
 }
 
 type EVPNConfig struct {
@@ -59,7 +60,7 @@ type RouterConfig struct {
 	VRF      string
 	RouterID string
 	Peers    []NeighborConfig
-	EVPNs    []EVPNConfig
+	Fabric   bool
 }
 
 // NeighborConfig structure
@@ -165,9 +166,12 @@ hostname frr-k8s
 log syslog {{.LogLevel}}
 
 !{{- range $v:= .VRFs }}
-vrf {{$v.Name}}{{- range $v.StaticRoutes }}
- ip route {{.Destination}} {{.NextHop}}{{- end }}
-exit-vrf{{- end }}
+vrf {{$v.Name}}
+{{- range $v.StaticRoutes }}
+ ip route {{.Destination}} {{.NextHop}}
+{{- end }}
+exit-vrf
+{{- end }}
 
 {{- range .PrefixLists }}
 ip prefix-list {{.Name}} seq {{.Seq}} {{if .Permit}}permit{{else}}deny{{end}} {{.Prefix}}
@@ -175,7 +179,9 @@ ip prefix-list {{.Name}} seq {{.Seq}} {{if .Permit}}permit{{else}}deny{{end}} {{
 
 {{- range .RouteMaps }}
 route-map {{.Name}} {{if .Permit}}permit{{else}}deny{{end}} {{.Seq}}
+{{- if .PrefixList }}
  match ip address {{.PrefixList}}
+{{- end }}
  exit
 {{- end }}
 
@@ -202,26 +208,31 @@ router bgp {{$.ASN}}{{if .VRF}} vrf {{.VRF}}{{end}}
  {{- if .RouteMapOut }}
   neighbor {{.PeerIP}} route-map {{.RouteMapOut}} out
  {{- end }}
+
   address-family ipv4 unicast
    neighbor {{.PeerIP}} activate
   exit-address-family
+
+{{- if .Fabric}}
   address-family l2vpn evpn
    neighbor {{.PeerIP}} activate
    advertise-all-vni
    advertise-svi-ip
   exit-address-family
+{{- end }}
  {{- end }}
- exit
 
- {{- range .EVPNs }}
+exit
+{{- end }}
+
+{{- if .EVPNs }}
+{{- range .EVPNs }}
 router bgp {{$.ASN}} vrf {{.VRF}}
  address-family l2vpn evpn
   advertise ipv4 unicast
  exit-address-family
 exit
 {{- end }}
-
-exit
 {{- end }}
 `
 
@@ -271,7 +282,7 @@ func generateFRRConfig(config GlobalConfig, outputPath string) error {
 	defer file.Close()
 
 	// This is a lifehack since vtysh.conf is required for FRR to start but its not present
-	vtysh, err := os.Create("/etc/frr/vtysh.conf")
+	vtysh, err := os.Create("/tmp/vtysh.conf")
 	if err != nil {
 		return err
 	}
@@ -289,7 +300,7 @@ func generateFRRConfig(config GlobalConfig, outputPath string) error {
 
 func reloadFRR() error {
 	fmt.Println("Reloading FRR configuration...")
-	cmd := exec.Command("/usr/lib/frr/frr-reload.py", "--reload", "--overwrite", "/etc/frr/frr.conf")
+	cmd := exec.Command("/usr/lib/frr/frr-reload.py", "--reload", "--overwrite", "/tmp/frr.conf")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Println("Failed to reload FRR:", err, string(output))
@@ -306,14 +317,18 @@ func main() {
 		LogLevel: "debug",
 		Routers: []RouterConfig{
 			{
+				RouterID: "172.30.1.5",
+				Peers: []NeighborConfig{
+					{PeerIP: "172.30.1.1", PeerASN: "64513", Description: "spine1"},
+				},
+				Fabric: true,
+			},
+			{
 				VRF:      "hedge",
 				RouterID: "192.168.1.1",
 				Peers: []NeighborConfig{
 					{PeerIP: "192.168.1.2", PeerASN: "64513", Description: "hedge's friend"},
 					{PeerIP: "192.168.1.3", PeerASN: "64514", Password: "nothedge"},
-				},
-				EVPNs: []EVPNConfig{
-					{VRF: "hedge"},
 				},
 			},
 			{
@@ -321,9 +336,6 @@ func main() {
 				RouterID: "192.168.2.1",
 				Peers: []NeighborConfig{
 					{PeerIP: "192.168.2.2", PeerASN: "64515", Description: "hog's friend", RouteMapIn: "test", RouteMapOut: "test"},
-				},
-				EVPNs: []EVPNConfig{
-					{VRF: "hog"},
 				},
 			},
 		},
@@ -340,6 +352,10 @@ func main() {
 		RouteMaps: []RouteMapConfig{
 			{Name: "test", Permit: true, Seq: 10, PrefixList: "test", MatchType: "ip"},
 		},
+		EVPNs: []EVPNConfig{
+			{VRF: "hedge"},
+			{VRF: "hog"},
+		},
 	}
 
 	// Generate FRR config and reload FRR periodically
@@ -350,7 +366,7 @@ func main() {
 			fmt.Println("Error updating VRFs:", err)
 		}
 
-		err = generateFRRConfig(globalConfig, "/etc/frr/frr.conf")
+		err = generateFRRConfig(globalConfig, "/tmp/frr.conf")
 		if err != nil {
 			fmt.Println("Error generating FRR config:", err)
 		} else {
