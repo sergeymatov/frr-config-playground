@@ -151,25 +151,41 @@ exit
 {{- end }}
 `
 
-func updateVRFs(vrfs []VRFConfig) error {
+func updateVRFs(vrfs []VRFConfig, routers []RouterConfig) error {
 	for _, vrf := range vrfs {
 		fmt.Printf("Configuring VRF: %s with VNI: %d\n", vrf.Name, vrf.VNI)
 
-		// Check if the VRF already exists
+		// Find the RouterID for this VRF
+		var routerID string
+		for _, router := range routers {
+			if router.VRF == vrf.Name {
+				routerID = router.RouterID
+				break
+			}
+		}
+
+		// Check if the VRF exists
 		checkCmd := exec.Command("ip", "link", "show", vrf.Name)
 		output, err := checkCmd.CombinedOutput()
 		if err == nil && strings.Contains(string(output), vrf.Name) {
-			// VRF exists, ensure it's up
 			fmt.Printf("VRF %s already exists, bringing it up\n", vrf.Name)
 			cmd := exec.Command("ip", "link", "set", vrf.Name, "up")
 			if err := cmd.Run(); err != nil {
 				fmt.Printf("Error bringing up VRF %s: %v\n", vrf.Name, err)
 				return err
 			}
-			continue // Skip creating VRF since it exists
+			// Assign IP if RouterID exists
+			if routerID != "" {
+				cmd := exec.Command("ip", "addr", "add", routerID+"/24", "dev", vrf.Name)
+				if err := cmd.Run(); err != nil {
+					fmt.Printf("Error assigning IP %s to VRF %s: %v\n", routerID, vrf.Name, err)
+					return err
+				}
+			}
+			continue
 		}
 
-		// Create the VRF if it doesn't exist
+		// Create VRF if it does not exist
 		fmt.Printf("Creating VRF %s\n", vrf.Name)
 		cmd := exec.Command("ip", "link", "add", vrf.Name, "type", "vrf", "table", fmt.Sprintf("%d", vrf.VNI))
 		if err := cmd.Run(); err != nil {
@@ -182,6 +198,15 @@ func updateVRFs(vrfs []VRFConfig) error {
 		if err := cmd.Run(); err != nil {
 			fmt.Printf("Error bringing up VRF %s: %v\n", vrf.Name, err)
 			return err
+		}
+
+		// Assign IP if RouterID exists
+		if routerID != "" {
+			cmd := exec.Command("ip", "addr", "add", routerID+"/24", "dev", vrf.Name)
+			if err := cmd.Run(); err != nil {
+				fmt.Printf("Error assigning IP %s to VRF %s: %v\n", routerID, vrf.Name, err)
+				return err
+			}
 		}
 	}
 	return nil
@@ -261,7 +286,7 @@ func main() {
 		VRFs: []VRFConfig{
 			{Name: "hedge", VNI: 100,
 				StaticRoutes: []StaticRouteConfig{
-					{VRF: "hedge", Destination: "0.0.0.0/0", NextHop: "192.168.1.1"},
+					{VRF: "hedge", Destination: "0.0.0.0/0", NextHop: "192.168.1.3"},
 				}},
 			{Name: "hog", VNI: 200},
 		},
@@ -280,7 +305,7 @@ func main() {
 	// Generate FRR config and reload FRR periodically
 	for {
 		// Update VRFs
-		err := updateVRFs(globalConfig.VRFs)
+		err := updateVRFs(globalConfig.VRFs, globalConfig.Routers)
 		if err != nil {
 			fmt.Println("Error updating VRFs:", err)
 		}
