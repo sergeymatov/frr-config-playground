@@ -24,6 +24,11 @@ type EVPNConfig struct {
 	VRF string
 }
 
+type VRFPeeringEntry struct {
+	FromVRF  string
+	Prefixes []string
+}
+
 // PrefixListConfig structure
 type PrefixListConfig struct {
 	Name   string
@@ -53,6 +58,7 @@ type VRFConfig struct {
 	Name         string
 	VNI          uint32
 	StaticRoutes []StaticRouteConfig
+	Peering      []VRFPeeringEntry
 }
 
 // RouterConfig structure
@@ -89,7 +95,23 @@ exit-vrf
 {{- end }}
 
 {{- range .PrefixLists }}
-ip prefix-list {{.Name}} seq {{.Seq}} {{if .Permit}}permit{{else}}deny{{end}} {{.Prefix}}
+ip prefix-list {{.Name}} seq 1{{.Seq}} {{if .Permit}}permit{{else}}deny{{end}} {{.Prefix}}
+{{- end }}
+
+{{- range $v := .VRFs }}
+{{- range $p := $v.Peering }}
+{{- range $i, $s := $p.Prefixes}}
+ip prefix-list PL-{{$v.Name}}-from-{{$p.FromVRF}} seq 1{{$i}} permit {{$s}}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- range $v := .VRFs }}
+{{- range $p := $v.Peering }}
+route-map RM-{{$v.Name}}-from-{{$p.FromVRF}} permit 10
+ match ip address prefix-list PL-{{$v.Name}}-from-{{$p.FromVRF}}
+ exit
+{{- end }}
 {{- end }}
 
 {{- range .RouteMaps }}
@@ -138,6 +160,17 @@ router bgp {{$.ASN}}{{if .VRF}} vrf {{.VRF}}{{end}}
  {{- end }}
 
 exit
+{{- end }}
+
+{{- range $v := .VRFs }}
+router bgp {{$.ASN}} vrf {{$v.Name}}
+ address-family ipv4 unicast
+{{- range $p := $v.Peering }}
+ import vrf route-map RM-{{$v.Name}}-from-{{$p.FromVRF}}
+ import vrf {{$p.FromVRF}}
+{{- end }}
+  exit-address-family
+ exit
 {{- end }}
 
 {{- if .EVPNs }}
@@ -284,11 +317,16 @@ func main() {
 			},
 		},
 		VRFs: []VRFConfig{
-			{Name: "hedge", VNI: 100,
+			{Name: "hedge", VNI: 100, Peering: []VRFPeeringEntry{
+				{FromVRF: "hog", Prefixes: []string{"10.10.0.0/24"}},
+			},
 				StaticRoutes: []StaticRouteConfig{
 					{VRF: "hedge", Destination: "0.0.0.0/0", NextHop: "192.168.1.3"},
 				}},
-			{Name: "hog", VNI: 200},
+			{Name: "hog", VNI: 200, Peering: []VRFPeeringEntry{
+				{FromVRF: "hedge", Prefixes: []string{"10.20.0.0/24"}},
+			},
+			},
 		},
 		PrefixLists: []PrefixListConfig{
 			{Name: "test", Seq: 10, Permit: true, Prefix: "10.10.0.0/16"},
